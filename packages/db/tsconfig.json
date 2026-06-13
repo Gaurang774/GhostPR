@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist"
+  },
+  "include": ["migrate.ts", "seed.ts", "verify-signal-scanner.ts"],
+  "exclude": ["run-test-suite.ts", "dist"]
+}
