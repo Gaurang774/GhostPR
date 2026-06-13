@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "GhostPR": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PROJECT_DIR}/apps/mcp-server/dist/index.js"
+      ],
+      "env": {
+        "DATABASE_PATH": "${CLAUDE_PROJECT_DIR}/data/GhostPR.db",
+        "NODE_ENV": "development"
+      }
+    }
+  }
+}
