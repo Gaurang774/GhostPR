@@ -27,7 +27,7 @@ FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-COPY --from=builder /app/apps/ingestion/dist ./dist
+COPY --from=builder /app/apps/ingestion/dist ./apps/ingestion/dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/apps/ingestion/node_modules ./apps/ingestion/node_modules
 
@@ -35,4 +35,4 @@ COPY --from=builder /app/apps/ingestion/node_modules ./apps/ingestion/node_modul
 RUN mkdir -p /app/data
 ENV DATABASE_PATH="/app/data/GhostPR.db"
 
-CMD ["node", "dist/index.js"]
+CMD ["node", "apps/ingestion/dist/index.js"]
