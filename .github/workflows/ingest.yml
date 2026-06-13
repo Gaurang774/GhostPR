@@ -1,0 +1,38 @@
+name: GhostPR Ingestion Pipeline
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # Run daily at 2am UTC
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Run Ingestion Pipeline
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_OWNER: ${{ secrets.GITHUB_OWNER }}
+          GITHUB_REPO: ${{ secrets.GITHUB_REPO }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          HINDSIGHT_API_KEY: ${{ secrets.HINDSIGHT_API_KEY }}
+          HINDSIGHT_BANK_URL: ${{ secrets.HINDSIGHT_BANK_URL }}
+        run: pnpm run ingest

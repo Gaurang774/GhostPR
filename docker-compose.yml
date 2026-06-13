@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: apps/dashboard/Dockerfile
+    ports:
+      - "${DASHBOARD_PORT:-3000}:3000"
+    volumes:
+      - ghostpr_data:/app/data
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - DATABASE_PATH=/app/data/GhostPR.db
+      - HINDSIGHT_API_KEY=${HINDSIGHT_API_KEY}
+      - HINDSIGHT_BANK_URL=${HINDSIGHT_BANK_URL}
+    env_file:
+      - .env
+
+  ingestion:
+    build:
+      context: .
+      dockerfile: apps/ingestion/Dockerfile
+    volumes:
+      - ghostpr_data:/app/data
+    restart: "no"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_PATH=/app/data/GhostPR.db
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_OWNER=${GITHUB_OWNER}
+      - GITHUB_REPO=${GITHUB_REPO}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
+      - HINDSIGHT_API_KEY=${HINDSIGHT_API_KEY}
+      - HINDSIGHT_BANK_URL=${HINDSIGHT_BANK_URL}
+    env_file:
+      - .env
+
+volumes:
+  ghostpr_data:
