@@ -16,13 +16,6 @@
     "@GhostPR/shared-types": "workspace:*",
     "dotenv": "^16.4.0"
   },
-  "turbo": {
-    "tasks": {
-      "build": {
-        "outputs": [".next/**", "!.next/cache/**"]
-      }
-    }
-  },
   "devDependencies": {
     "typescript": "^5.8.0",
     "@types/react": "^18.3.0",
