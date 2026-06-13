@@ -1,0 +1,21 @@
+{
+  "name": "GhostPR",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.6.0",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "migrate": "pnpm --filter @GhostPR/db run migrate",
+    "ingest": "pnpm --filter ingestion run start",
+    "mcp": "pnpm --filter mcp-server run start",
+    "mcp:setup": "node scripts/mcp-setup.js",
+    "test": "pnpm --filter @GhostPR/db exec tsx run-test-suite.ts"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0",
+    "typescript": "^5.8.0",
+    "@types/node": "^22.0.0"
+  }
+}
