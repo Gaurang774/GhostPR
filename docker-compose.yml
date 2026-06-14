@@ -1,4 +1,23 @@
 services:
+  # ── Step 1: initialise (or migrate) the SQLite database ─────────────────────
+  # Runs once on every `docker compose up`. If the DB already exists and is
+  # seeded, migrate.js exits 0 immediately (idempotent). Downstream services
+  # wait for this to complete successfully before starting.
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/ingestion/Dockerfile
+    command: node packages/db/dist/migrate.js
+    volumes:
+      - ghostpr_data:/app/data
+    environment:
+      - NODE_ENV=production
+      - DATABASE_PATH=/app/data/GhostPR.db
+    env_file:
+      - .env
+    restart: "no"
+
+  # ── Step 2: dashboard (always-on web UI) ────────────────────────────────────
   dashboard:
     build:
       context: .
@@ -8,14 +27,25 @@ services:
     volumes:
       - ghostpr_data:/app/data
     restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     environment:
       - NODE_ENV=production
       - DATABASE_PATH=/app/data/GhostPR.db
-      - HINDSIGHT_API_KEY=${HINDSIGHT_API_KEY}
-      - HINDSIGHT_BANK_URL=${HINDSIGHT_BANK_URL}
+      - HINDSIGHT_API_KEY=${HINDSIGHT_API_KEY:-}
+      - HINDSIGHT_BANK_URL=${HINDSIGHT_BANK_URL:-}
     env_file:
       - .env
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/decisions"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
+  # ── Step 3: ingestion (one-shot, run manually or via CI) ───────────────────
+  # Usage: docker compose run --rm ingestion
   ingestion:
     build:
       context: .
@@ -23,6 +53,9 @@ services:
     volumes:
       - ghostpr_data:/app/data
     restart: "no"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     environment:
       - NODE_ENV=production
       - DATABASE_PATH=/app/data/GhostPR.db
@@ -31,8 +64,8 @@ services:
       - GITHUB_REPO=${GITHUB_REPO}
       - GROQ_API_KEY=${GROQ_API_KEY}
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
-      - HINDSIGHT_API_KEY=${HINDSIGHT_API_KEY}
-      - HINDSIGHT_BANK_URL=${HINDSIGHT_BANK_URL}
+      - HINDSIGHT_API_KEY=${HINDSIGHT_API_KEY:-}
+      - HINDSIGHT_BANK_URL=${HINDSIGHT_BANK_URL:-}
     env_file:
       - .env
 
