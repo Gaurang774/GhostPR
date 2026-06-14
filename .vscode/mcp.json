@@ -1,0 +1,13 @@
+{
+  "servers": {
+    "GhostPR": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/apps/mcp-server/dist/index.js"],
+      "env": {
+        "DATABASE_PATH": "${workspaceFolder}/data/GhostPR.db",
+        "NODE_ENV": "production"
+      }
+    }
+  }
+}
