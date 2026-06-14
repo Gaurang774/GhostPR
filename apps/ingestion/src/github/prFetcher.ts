@@ -33,20 +33,34 @@ export async function fetchMergedPRs(options: {
 
   console.log(`🐙 Fetching up to ${limit} merged PRs from ${owner}/${repo}...`);
 
-  // Fetch closed PRs (GitHub has no direct "merged" filter — we filter by merged_at)
-  const { data: pullRequests } = await octokit.pulls.list({
-    owner,
-    repo,
-    state: 'closed',
-    sort: 'updated',
-    direction: 'desc',
-    per_page: Math.min(limit * 2, 100), // Fetch extra to account for unmerged closures
-  });
+  // GitHub has no direct "merged" filter — we list closed PRs and keep the ones
+  // with a non-null merged_at. A single page is not enough: an active repo can
+  // have many closed-but-unmerged PRs (dependabot closures, declined PRs) at the
+  // top, so we paginate until we've collected `limit` merged PRs (or run out /
+  // hit a safety cap on pages scanned).
+  const MAX_PAGES = 10; // up to 1000 closed PRs scanned — plenty for any limit
+  const mergedPRs: Array<Awaited<ReturnType<typeof octokit.pulls.list>>['data'][number]> = [];
 
-  // Filter to only merged PRs
-  const mergedPRs = pullRequests
-    .filter((pr) => pr.merged_at !== null)
-    .slice(0, limit);
+  for (let page = 1; page <= MAX_PAGES && mergedPRs.length < limit; page++) {
+    const { data: pullRequests } = await octokit.pulls.list({
+      owner,
+      repo,
+      state: 'closed',
+      sort: 'updated',
+      direction: 'desc',
+      per_page: 100,
+      page,
+    });
+
+    if (pullRequests.length === 0) break; // no more closed PRs
+
+    for (const pr of pullRequests) {
+      if (pr.merged_at !== null) {
+        mergedPRs.push(pr);
+        if (mergedPRs.length >= limit) break;
+      }
+    }
+  }
 
   console.log(`   Found ${mergedPRs.length} merged PRs to process`);
 
