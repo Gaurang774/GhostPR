@@ -1,6 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: 'standalone',
+  // 'standalone' output is only needed for the Docker production image, which
+  // copies .next/standalone. It symlinks traced deps during build, and Windows
+  // blocks symlink creation without Developer Mode/admin (EPERM). Local
+  // `pnpm build` and `pnpm dev` don't need it, so it's opt-in via env var —
+  // the dashboard Dockerfile sets BUILD_STANDALONE=true.
+  output: process.env.BUILD_STANDALONE === 'true' ? 'standalone' : undefined,
   reactStrictMode: true,
   webpack: (config, { isServer }) => {
     if (isServer) {

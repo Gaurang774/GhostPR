@@ -20,6 +20,8 @@ RUN pnpm install --no-frozen-lockfile
 
 COPY --from=pruner /app/out/full/ .
 COPY --from=pruner /app/tsconfig.base.json ./tsconfig.base.json
+# Enable Next.js standalone output for the production image (see next.config.js)
+ENV BUILD_STANDALONE=true
 RUN pnpm turbo run build --filter=dashboard...
 
 # Stash the sql.js WASM and JS at a version-independent path for the runner stage
