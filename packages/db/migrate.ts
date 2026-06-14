@@ -2,7 +2,7 @@ import initSqlJs from 'sql.js';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { seedDecisions } from './seed.js';
+import { seedDecisions, seedAgentLogs } from './seed.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -42,7 +42,11 @@ const DB_PATH = rawDbPath.startsWith('.')
   ? join(workspaceRoot, rawDbPath)
   : rawDbPath;
 
-const SCHEMA_PATH = join(__dirname, 'schema.sql');
+// schema.sql is next to the source file (packages/db/) but not copied into dist/
+// when running compiled output, look one directory up
+const SCHEMA_PATH = existsSync(join(__dirname, 'schema.sql'))
+  ? join(__dirname, 'schema.sql')
+  : join(__dirname, '..', 'schema.sql');
 
 function generateUUID(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -153,6 +157,25 @@ async function run(): Promise<void> {
   insertStmt.free();
 
   console.log(`✅ Seeded ${seedDecisions.length} decisions`);
+
+  // Insert seed agent logs
+  const logStmt = db.prepare(`
+    INSERT INTO agent_log (id, decision_id, action, timestamp, result)
+    VALUES (:id, :decisionId, :action, :timestamp, :result)
+  `);
+
+  for (const log of seedAgentLogs) {
+    logStmt.run({
+      ':id': log.id,
+      ':decisionId': log.decisionId,
+      ':action': log.action,
+      ':timestamp': log.timestamp,
+      ':result': log.result,
+    });
+  }
+  logStmt.free();
+
+  console.log(`✅ Seeded ${seedAgentLogs.length} agent log entries`);
 
   // Verify: print summary
   const rows = db.exec(

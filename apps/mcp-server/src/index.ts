@@ -15,7 +15,7 @@
  * stdout is reserved for MCP JSON-RPC protocol messages.
  */
 
-import { readFileSync, existsSync, writeFileSync } from 'fs';
+import { readFileSync, existsSync, writeFileSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import initSqlJs from 'sql.js';
@@ -86,6 +86,10 @@ async function openDatabase(dbPath: string): Promise<Database> {
     // Enable foreign keys
     db.run('PRAGMA foreign_keys = ON');
 
+    // Record the mtime at load time so periodic saves know not to clobber
+    // anything that was written before we started
+    lastWrittenMtime = statSync(absolutePath).mtimeMs;
+
     console.error(`📂 Database loaded: ${absolutePath}`);
     return db;
   } catch (err) {
@@ -94,12 +98,28 @@ async function openDatabase(dbPath: string): Promise<Database> {
   }
 }
 
+// Track when we last wrote to the file so we don't clobber external changes
+// (e.g. a `pnpm migrate` or re-seed run while the server is live)
+let lastWrittenMtime = 0;
+
 function saveDatabase(db: Database, dbPath: string): void {
   const absolutePath = dbPath.startsWith('.')
     ? join(workspaceRoot, dbPath)
     : dbPath;
+
+  // If the file on disk is newer than our last write, someone else updated it.
+  // Reload rather than overwrite, so we don't clobber migrations or seeds.
+  if (existsSync(absolutePath)) {
+    const fileMtime = statSync(absolutePath).mtimeMs;
+    if (fileMtime > lastWrittenMtime && lastWrittenMtime > 0) {
+      console.error(`⚠ DB file changed externally (mtime ${fileMtime} > ${lastWrittenMtime}) — skipping save to avoid clobber`);
+      return;
+    }
+  }
+
   const data = db.export();
   writeFileSync(absolutePath, Buffer.from(data));
+  lastWrittenMtime = statSync(absolutePath).mtimeMs;
   console.error(`💾 Database saved: ${absolutePath}`);
 }
 
