@@ -74,15 +74,34 @@ pnpm run ingest
 ```
 
 ### 6. IDE MCP Configuration
-1. Build the workspace:
-   ```bash
-   pnpm run build
-   ```
-2. Generate your server configuration:
-   ```bash
-   node scripts/mcp-setup.js
-   ```
-3. Copy the generated **Option A** configuration block and paste it into your IDE settings (e.g. Cursor's MCP command section or Claude Desktop's `claude_desktop_config.json` file).
+
+First build the workspace (this creates `apps/mcp-server/dist/index.js`, which the MCP server runs):
+```bash
+pnpm run build
+```
+
+> **Prerequisite:** the MCP server only starts if **both** `apps/mcp-server/dist/index.js` (from `pnpm run build`) and `data/GhostPR.db` (from `pnpm run migrate`) exist. If the server shows as "failed" in your IDE, one of these is missing.
+
+Then configure your IDE:
+
+#### Claude Code / Claude Desktop
+The repo already ships `.mcp.json` (uses `${CLAUDE_PROJECT_DIR}`). Claude Code auto-detects it when you open the project — run `/mcp` to (re)connect. For Claude Desktop, run `node scripts/mcp-setup.js` and paste the generated **Option A** block into `claude_desktop_config.json`.
+
+#### VS Code (GitHub Copilot) / Cursor
+The repo ships `.vscode/mcp.json` (uses `${workspaceFolder}`, so it works at any path — including paths with spaces). VS Code's native MCP support auto-detects it:
+
+1. Open `.vscode/mcp.json` and click the **▶ Start** button above the `"GhostPR"` entry (or Command Palette → **MCP: List Servers** → GhostPR → Start).
+2. Open Copilot Chat and switch the mode dropdown to **Agent**. **MCP tools only work in Agent mode** — not Ask or Edit mode.
+3. Click the **🛠️ tools** icon in the chat box — `getFileDecisions`, `markDeprecated`, and `ignoreDecision` should appear.
+
+> Note: `github.copilot.chat.mcpServers` in `settings.json` is **not** a valid setting — VS Code MCP servers are configured via `.vscode/mcp.json` only.
+
+**Troubleshooting** (Command Palette → **MCP: List Servers** → GhostPR → **Show Output** for the server's stderr):
+| Message | Fix |
+| --- | --- |
+| `❌ Database not found` | Run `pnpm run migrate` (set `SEED_DEMO=true` first for demo data) |
+| `Cannot find module …dist/index.js` | Run `pnpm run build` |
+| `node is not recognized` | Install Node.js 24+ and ensure it's on `PATH` |
 
 ---
 
