@@ -122,6 +122,20 @@ async function run(): Promise<void> {
     return;
   }
 
+  // Demo seed is opt-in. Real self-hosted installs start empty and are filled
+  // only by the ingestion pipeline (their own repo's PRs). Set SEED_DEMO=true
+  // (e.g. for demos / evaluation) to load the 8 sample decisions.
+  const seedDemo = (process.env['SEED_DEMO'] ?? '').toLowerCase() === 'true';
+  if (!seedDemo) {
+    console.log('ℹ️  SEED_DEMO not set — leaving database empty (schema only).');
+    console.log('   Real decisions will appear once the ingestion pipeline runs.');
+    console.log('   To load demo data, set SEED_DEMO=true and re-run migrate.');
+    const data = db.export();
+    writeFileSync(DB_PATH, Buffer.from(data));
+    db.close();
+    return;
+  }
+
   // Insert seed decisions
   const insertStmt = db.prepare(`
     INSERT INTO decisions (

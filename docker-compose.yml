@@ -13,6 +13,7 @@ services:
     environment:
       - NODE_ENV=production
       - DATABASE_PATH=/app/data/GhostPR.db
+      - SEED_DEMO=${SEED_DEMO:-false}
     env_file:
       - .env
     restart: "no"
