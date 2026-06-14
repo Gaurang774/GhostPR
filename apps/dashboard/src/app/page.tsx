@@ -1,12 +1,12 @@
 import React from 'react';
-import { fetchDecisions } from '@/lib/api';
+import { getAllDecisions } from '@/lib/decisions';
 import { DecisionList } from '@/components/DecisionList';
 
 export const revalidate = 0; // Disable caching to ensure fresh DB reads on every reload
 
 export default async function HomePage() {
   try {
-    const decisions = await fetchDecisions();
+    const decisions = await getAllDecisions();
 
     return (
       <div className="home-page fade-in">

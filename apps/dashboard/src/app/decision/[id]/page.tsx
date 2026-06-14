@@ -1,6 +1,6 @@
 import React from 'react';
 import Link from 'next/link';
-import { fetchDecision } from '@/lib/api';
+import { getDecisionById } from '@/lib/decisions';
 import { HealthBadge } from '@/components/HealthBadge';
 import { AgentLog } from '@/components/AgentLog';
 
@@ -16,7 +16,10 @@ export default async function DecisionDetailPage({ params }: DecisionDetailPageP
   const { id } = params;
 
   try {
-    const decision = await fetchDecision(id);
+    const decision = await getDecisionById(id);
+    if (!decision) {
+      throw new Error(`Decision not found: ${id}`);
+    }
 
     const formattedCreated = new Date(decision.created).toLocaleDateString('en-US', {
       year: 'numeric',
