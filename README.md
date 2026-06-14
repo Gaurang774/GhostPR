@@ -8,6 +8,18 @@ By injecting this historical context, GhostPR prevents AI agents from accidental
 
 ---
 
+## 📸 Screenshots
+
+**Decision Health Dashboard** — every architectural decision with its confidence, status, and source PR:
+
+![GhostPR dashboard](docs/screenshots/dashboard-home.png)
+
+**Decision Detail** — the full "why / outcome / lesson" plus the agent retrieval timeline:
+
+![GhostPR decision detail](docs/screenshots/decision-detail.png)
+
+---
+
 ## 🚀 How it Works
 
 1. **Automatic Ingestion:** GhostPR scans your GitHub Pull Requests and issues, using Groq LLM to extract key technical decisions (ignoring casual chat, typos, and simple bug fixes) and stores them in a local SQLite database.
@@ -47,11 +59,13 @@ GROQ_API_KEY=gsk_your_groq_api_key
 ```
 
 ### 4. Database Initialization
-Initialize your local SQLite database and seed initial test decisions:
+Initialize your local SQLite database (schema only — your decisions come from your own repo via ingestion):
 ```bash
 pnpm run migrate
 ```
 This will create `data/GhostPR.db` (or whatever `DATABASE_PATH` you set in `.env`).
+
+> **Trying it out?** Set `SEED_DEMO=true` in your `.env` before running migrate to load 8 sample decisions for a quick tour of the dashboard. Real installs leave this `false` so the database only ever contains decisions ingested from your repository.
 
 ### 5. Ingestion (Scan Repository History)
 To read your repository's merged PRs and populate the decision memory:
@@ -101,8 +115,28 @@ To browse your repository's decision health, track confidence decay, and inspect
 ---
 
 ## 🏗️ Repository Architecture
-- `apps/ingestion` - The CLI pipeline that fetches PRs, extracts decisions, and scores health.
-- `apps/mcp-server` - The STDIO MCP server for IDE integration.
-- `apps/dashboard` - The Next.js dashboard frontend.
-- `packages/db` - Database schema, migrations, and helper scripts.
-- `packages/shared-types` - Shared TypeScript definitions.
+
+```mermaid
+flowchart LR
+    GH[GitHub PRs / Issues] -->|fetch| ING[apps/ingestion]
+    ING -->|extract decisions| GROQ[Groq LLM]
+    ING -->|write| DB[(SQLite<br/>data/GhostPR.db)]
+    DB --> MCP[apps/mcp-server<br/>STDIO / MCP]
+    DB --> DASH[apps/dashboard<br/>Next.js]
+    MCP -->|warning cards| IDE[Agentic IDE<br/>Cursor / Claude Code]
+    DASH -->|decision health UI| USER[Developer]
+
+    subgraph shared
+      TYPES[packages/shared-types]
+      DBPKG[packages/db<br/>schema · migrate · seed]
+    end
+    DBPKG -.-> DB
+```
+
+| Path | Responsibility |
+| --- | --- |
+| `apps/ingestion` | CLI pipeline that fetches PRs, extracts decisions via Groq, and scores health. |
+| `apps/mcp-server` | STDIO MCP server that surfaces decision context to the IDE. |
+| `apps/dashboard` | Next.js dashboard for browsing decision health and retrieval logs. |
+| `packages/db` | SQLite schema, migrations, and seed scripts (`SEED_DEMO` controls demo data). |
+| `packages/shared-types` | Shared TypeScript definitions across all apps. |
