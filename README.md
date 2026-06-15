@@ -105,6 +105,59 @@ The repo ships `.vscode/mcp.json` (uses `${workspaceFolder}`, so it works at any
 
 ---
 
+## 🧪 Testing on Another Machine / Another Repo
+
+GhostPR is repo-agnostic — each person who tries it uses **their own credentials** and points it at **whichever repository they want to analyze**. Two independent things to set up:
+
+### A. Get it running on a fresh machine
+1. **Install prerequisites:** Node.js 24+ (on `PATH`), `pnpm` (`npm install -g pnpm`), and Git.
+2. **Clone, install, build:**
+   ```bash
+   git clone https://github.com/Gaurang774/GhostPR.git ghostpr
+   cd ghostpr
+   pnpm install
+   pnpm run build
+   ```
+3. **Create a fresh `.env`** — never copy someone else's `.env` (it contains private keys):
+   ```bash
+   cp .env.example .env
+   ```
+   Keep `DATABASE_PATH=./data/GhostPR.db` (it's relative, so it works at any clone path).
+4. **Quick no-credential demo:** set `SEED_DEMO=true` in `.env`, then:
+   ```bash
+   pnpm run migrate   # loads 8 sample decisions
+   pnpm run dev       # dashboard at http://localhost:3000
+   ```
+   No GitHub or Groq keys are needed just to tour the dashboard with demo data.
+
+### B. Point it at a different repository
+Each tester fills `.env` with **their own** keys and the **target repo** they want to scan:
+```ini
+GITHUB_TOKEN=<the tester's own token>
+GITHUB_OWNER=<owner of the repo to analyze>
+GITHUB_REPO=<name of the repo to analyze>
+GROQ_API_KEY=<the tester's own Groq key>
+SEED_DEMO=false   # ingest real PRs instead of demo data
+```
+
+**Which GitHub token?** The pipeline only **reads** merged PRs — no write access needed. Generate it in *your own* GitHub account under **Settings → Developer settings**:
+
+| Target repo | Classic PAT | Fine-grained PAT (recommended) |
+| --- | --- | --- |
+| **Public** | `public_repo` scope | scoped to that repo, **Pull requests: Read-only** |
+| **Private** | full `repo` scope | scoped to that repo, **Pull requests: Read-only** (token owner must have repo access) |
+
+Then ingest and run:
+```bash
+pnpm run migrate   # schema only when SEED_DEMO=false
+pnpm run ingest    # scans the target repo's merged PRs
+pnpm run dev
+```
+
+> **Security:** Each tester generates their own `GITHUB_TOKEN` and `GROQ_API_KEY` — never share or commit them. `.env` is git-ignored; keep it that way. The absolute `D:\...` paths in `.claude/skills` are specific to the original machine and don't apply elsewhere; use the `pnpm run …` commands above on other machines.
+
+---
+
 ## 💻 Usage Guide
 
 ### Auto-Retrieval
