@@ -1,10 +1,14 @@
 import { NextResponse } from 'next/server';
 import { getAllDecisions } from '@/lib/decisions';
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const decisions = await getAllDecisions();
-    return NextResponse.json(decisions);
+    const status = new URL(request.url).searchParams.get('status');
+    const filtered = status
+      ? decisions.filter((d) => d.status === status)
+      : decisions;
+    return NextResponse.json(filtered);
   } catch (err: any) {
     console.error('API Error /api/decisions:', err);
     return NextResponse.json(
