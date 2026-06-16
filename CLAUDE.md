@@ -20,6 +20,8 @@ pnpm run migrate        # apply schema.sql, create data/GhostPR.db (SEED_DEMO=tr
 pnpm run ingest         # scan the target repo's merged PRs and extract decisions
 pnpm run mcp            # run the MCP server manually (normally the IDE launches it)
 pnpm run test           # db test suite — runs packages/db/run-test-suite.ts via tsx
+pnpm run mcp:setup      # regenerate the IDE MCP config files (.mcp.json / .vscode / .cursor);
+                        #   points them at dist/index.js if built, else src via tsx
 ```
 
 Run a single workspace's script directly with a filter, e.g. `pnpm --filter @GhostPR/db run migrate`, `pnpm --filter ingestion run start`, `pnpm --filter mcp-server run start`.
