@@ -31,16 +31,57 @@ type ExtractedDecision = z.infer<typeof ExtractedDecisionSchema>;
 
 // ─── Prompt builder ───────────────────────────────────────────────────────────
 
+const MAX_CONTEXT_CHARS = 6000; // ~1500 tokens — keeps Groq calls cheap and fast
+
+/**
+ * Assemble the PR context block fed to the LLM. Sections are ordered by signal
+ * strength (reviews first) and each item is individually truncated, so a hard
+ * overall cap never slices through the middle of a single review/comment.
+ * Empty sections are omitted — a PR with no reviews/comments degrades cleanly to
+ * just title + description + changed files (same as the pre-comment behaviour).
+ */
+function buildPRContext(pr: RawPR): string {
+  const sections: string[] = [];
+
+  sections.push(`PR #${pr.number}: ${pr.title}`);
+  sections.push(`Author: @${pr.author}`);
+
+  if (pr.body.trim()) {
+    sections.push(`Description:\n${pr.body.slice(0, 1000)}`);
+  }
+
+  if (pr.changedFiles.length > 0) {
+    sections.push(`Changed Files:\n${pr.changedFiles.slice(0, 20).join('\n')}`);
+  }
+
+  if (pr.reviews.length > 0) {
+    const text = pr.reviews
+      .slice(0, 10)
+      .map((r) => `[${r.state} by @${r.author}]\n${r.body.slice(0, 500)}`)
+      .join('\n\n');
+    sections.push(`PR Reviews:\n${text}`);
+  }
+
+  if (pr.reviewComments.length > 0) {
+    const text = pr.reviewComments
+      .slice(0, 10) // cap inline comments
+      .map((c) => `[@${c.author} on ${c.path}]\n${c.body.slice(0, 300)}`)
+      .join('\n\n');
+    sections.push(`Inline Comments:\n${text}`);
+  }
+
+  if (pr.issueComments.length > 0) {
+    const text = pr.issueComments
+      .slice(0, 10)
+      .map((c) => `[@${c.author}]\n${c.body.slice(0, 400)}`)
+      .join('\n\n');
+    sections.push(`Discussion:\n${text}`);
+  }
+
+  return sections.join('\n\n---\n\n').slice(0, MAX_CONTEXT_CHARS);
+}
+
 function buildPrompt(pr: RawPR): string {
-  const filesText = pr.changedFiles.slice(0, 20).join('\n'); // Cap at 20 files for token efficiency
-  const commentsText = pr.comments
-    .slice(0, 10)                            // Cap at 10 comments
-    .map((c, i) => `Comment ${i + 1}: ${c}`)
-    .join('\n\n');
-
-  // Truncate body to ~2000 chars to avoid token overflow
-  const body = pr.body.length > 2000 ? pr.body.slice(0, 2000) + '...[truncated]' : pr.body;
-
   return `You are a decision extractor for a codebase memory system.
 
 Given a GitHub PR, extract ONE architectural or technical decision that was made.
@@ -70,19 +111,10 @@ Respond with ONLY valid JSON matching this exact shape — no markdown, no expla
 
 If no architectural decision is present, respond with exactly: NO_DECISION
 
+When review comments or discussion conflict with the PR description, prefer the reasoning in the reviews/inline comments — they represent the considered technical judgment reached during code review, whereas the description is often written before that discussion.
+
 ---
-PR Title: ${pr.title}
-
-PR Author: ${pr.author}
-
-PR Body:
-${body || '(no description provided)'}
-
-Changed Files:
-${filesText || '(no files listed)'}
-
-Comments:
-${commentsText || '(no comments)'}`;
+${buildPRContext(pr)}`;
 }
 
 // ─── Extractor ────────────────────────────────────────────────────────────────
