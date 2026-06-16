@@ -8,7 +8,9 @@ on:
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: write # needed to commit the updated DB back
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -38,3 +40,15 @@ jobs:
           HINDSIGHT_API_KEY: ${{ secrets.HINDSIGHT_API_KEY }}
           HINDSIGHT_BANK_URL: ${{ secrets.HINDSIGHT_BANK_URL }}
         run: pnpm run ingest
+
+      - name: Commit updated database
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f data/GhostPR.db
+          if git diff --staged --quiet; then
+            echo "No database changes to commit."
+          else
+            git commit -m "chore: update decision registry from ingest [skip ci]"
+            git push
+          fi
