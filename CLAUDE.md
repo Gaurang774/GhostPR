@@ -20,6 +20,8 @@ pnpm run migrate        # apply schema.sql, create data/GhostPR.db (SEED_DEMO=tr
 pnpm run ingest         # scan the target repo's merged PRs and extract decisions
 pnpm run mcp            # run the MCP server manually (normally the IDE launches it)
 pnpm run test           # db test suite — runs packages/db/run-test-suite.ts via tsx
+pnpm run mcp:setup      # regenerate the IDE MCP config files (.mcp.json / .vscode / .cursor);
+                        #   points them at dist/index.js if built, else src via tsx
 ```
 
 Run a single workspace's script directly with a filter, e.g. `pnpm --filter @GhostPR/db run migrate`, `pnpm --filter ingestion run start`, `pnpm --filter mcp-server run start`.
@@ -28,7 +30,7 @@ There is no per-test runner flag; `pnpm run test` executes the whole `packages/d
 
 ## Environment
 
-Config comes from `.env` at the repo root (copy `.env.example`). Key vars: `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO`, `GROQ_API_KEY`, `DATABASE_PATH` (default `./data/GhostPR.db`, kept relative so it works at any clone path), `PR_LIMIT` (default 20), `SEED_DEMO` (demo data toggle), and optional `HINDSIGHT_API_KEY` / `HINDSIGHT_BANK_URL`. Every app independently walks up the tree to find the workspace root (the dir containing `pnpm-workspace.yaml`) and loads `.env` from there.
+Config comes from `.env` at the repo root (copy `.env.example`). Key vars: `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO`, `GROQ_API_KEY`, `GROQ_MODEL` (default `llama-3.3-70b-versatile`), `DATABASE_PATH` (default `./data/GhostPR.db`, kept relative so it works at any clone path), `PR_LIMIT` (default 20), `SEED_DEMO` (demo data toggle), and optional `HINDSIGHT_API_KEY` / `HINDSIGHT_BANK_URL`. Every app independently walks up the tree to find the workspace root (the dir containing `pnpm-workspace.yaml`) and loads `.env` from there.
 
 ## Architecture
 
@@ -54,3 +56,8 @@ New decisions start at confidence 0.9 (`active`). Confidence decays exponentiall
 ## MCP / IDE config
 
 The repo ships `.mcp.json` (Claude Code), `.vscode/mcp.json` (VS Code / Copilot, `${workspaceFolder}`), and `.cursor/mcp.json`. Note: Claude Code does **not** expand `${CLAUDE_PROJECT_DIR}` (or other env vars) inside `.mcp.json` server definitions — that variable is only available to hooks. So `.mcp.json` uses a **relative** script path (`apps/mcp-server/dist/index.js`), which works because Claude Code spawns MCP servers with the project root as the working directory; the server itself resolves the workspace root from its own location and defaults the DB to `./data/GhostPR.db`. The MCP server only starts if **both** `apps/mcp-server/dist/index.js` (from `pnpm run build`) and the DB file (from `pnpm run migrate`) exist — a "failed" server in the IDE almost always means one is missing. All MCP-server logging goes to **stderr**; stdout is reserved for the JSON-RPC protocol.
+
+## Docker & CI
+
+- `docker-compose.yml` defines three services sharing the `ghostpr_data` named volume (mounted at `/app/data`): `migrate` (one-shot, idempotent — downstream services `depends_on` its successful completion), `dashboard` (always-on, port 3000, healthchecks `/api/decisions`), and `ingestion` (one-shot, run manually via `docker compose run --rm ingestion`). Each app has its own Dockerfile (`apps/ingestion/Dockerfile`, `apps/dashboard/Dockerfile`).
+- `.github/workflows/ingest.yml` runs the ingestion pipeline daily at 02:00 UTC (and on manual dispatch), then commits the updated `data/GhostPR.db` back to the repo with `[skip ci]`. The DB file is committed to git and updated by this job. Note: GitHub forbids `GITHUB_`-prefixed vars/secrets, so the target repo is passed via `vars.TARGET_OWNER` / `vars.TARGET_REPO` (mapped to `GITHUB_OWNER` / `GITHUB_REPO` at the step).

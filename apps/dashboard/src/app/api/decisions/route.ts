@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getAllDecisions } from '@/lib/decisions';
 
+// Reads `status` from the query string, so it must be rendered per-request
+// rather than statically prerendered at build time.
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: Request) {
   try {
     const decisions = await getAllDecisions();
