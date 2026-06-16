@@ -28,9 +28,10 @@ jobs:
       - name: Run Ingestion Pipeline
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_OWNER: ${{ secrets.GITHUB_OWNER }}
-          GITHUB_REPO: ${{ secrets.GITHUB_REPO }}
+          GITHUB_OWNER: ${{ vars.TARGET_OWNER }} # GH forbids vars/secrets starting with GITHUB_
+          GITHUB_REPO: ${{ vars.TARGET_REPO }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
           HINDSIGHT_API_KEY: ${{ secrets.HINDSIGHT_API_KEY }}
           HINDSIGHT_BANK_URL: ${{ secrets.HINDSIGHT_BANK_URL }}
         run: pnpm run ingest
