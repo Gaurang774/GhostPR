@@ -30,6 +30,7 @@ import { extractDecision } from './extractor/decisionExtractor.js';
 import { applyTimeDecay } from './health/scorer.js';
 import { scanPRForSignals } from './health/updater.js';
 import { HindsightClient } from './memory/hindsightClient.js';
+import { embedDecision } from './embeddings/embedder.js';
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 
@@ -146,16 +147,16 @@ function prAlreadyIngested(db: Database, prNumber: number): boolean {
 
 // ─── Decision insert ──────────────────────────────────────────────────────────
 
-function insertDecision(db: Database, decision: Decision): void {
+function insertDecision(db: Database, decision: Decision, embedding: number[] | null): void {
   const stmt = db.prepare(`
     INSERT INTO decisions (
       id, file_path, module, summary, reason, result, lesson,
       confidence, status, created, last_validated,
-      source_type, source_url, source_author, source_ref
+      source_type, source_url, source_author, source_ref, embedding
     ) VALUES (
       :id, :filePath, :module, :summary, :reason, :result, :lesson,
       :confidence, :status, :created, :lastValidated,
-      :sourceType, :sourceUrl, :sourceAuthor, :sourceRef
+      :sourceType, :sourceUrl, :sourceAuthor, :sourceRef, :embedding
     )
   `);
 
@@ -175,6 +176,7 @@ function insertDecision(db: Database, decision: Decision): void {
     ':sourceUrl': decision.source.url,
     ':sourceAuthor': decision.source.author,
     ':sourceRef': decision.source.refNumber,
+    ':embedding': embedding ? JSON.stringify(embedding) : null,
   });
 
   stmt.free();
@@ -299,9 +301,19 @@ async function main(): Promise<void> {
         console.log(`   ⬜ PR #${pr.number}: no architectural decision found`);
         skippedNoDecision++;
       } else {
+        // Generate the semantic-search embedding. Non-fatal: if the model fails
+        // to load, we still store the decision (embedding stays NULL — exact
+        // match still works, only semantic fallback is unavailable for it).
+        let embedding: number[] | null = null;
+        try {
+          embedding = await embedDecision(decision);
+        } catch (embErr) {
+          console.warn(`   ⚠ PR #${pr.number}: embedding generation failed (storing without it):`, embErr);
+        }
+
         // Insert into DB
         try {
-          insertDecision(db, decision);
+          insertDecision(db, decision, embedding);
           console.log(`   ✅ PR #${pr.number}: decision stored → "${decision.summary.slice(0, 60)}..."`);
           console.log(`      File: ${decision.filePath} | Module: ${decision.module} | Confidence: ${decision.confidence}`);
           inserted++;

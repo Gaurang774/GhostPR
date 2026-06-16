@@ -3,3 +3,8 @@ packages:
   - "packages/*"
 allowBuilds:
   esbuild: true
+  # Transitive deps of @xenova/transformers. sharp is hard-required at import
+  # time (even for text-only feature-extraction), so its native binary must be
+  # built. protobufjs's build script is harmless (pbjs codegen).
+  protobufjs: true
+  sharp: true
