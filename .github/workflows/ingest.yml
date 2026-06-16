@@ -8,15 +8,15 @@ on:
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: write # needed to commit the updated DB back
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 9
+        uses: pnpm/action-setup@v4 # version comes from package.json "packageManager"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -27,12 +27,28 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Initialize database
+        run: pnpm run migrate
+
       - name: Run Ingestion Pipeline
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_OWNER: ${{ secrets.GITHUB_OWNER }}
-          GITHUB_REPO: ${{ secrets.GITHUB_REPO }}
+          GITHUB_OWNER: ${{ vars.TARGET_OWNER }} # GH forbids vars/secrets starting with GITHUB_
+          GITHUB_REPO: ${{ vars.TARGET_REPO }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
           HINDSIGHT_API_KEY: ${{ secrets.HINDSIGHT_API_KEY }}
           HINDSIGHT_BANK_URL: ${{ secrets.HINDSIGHT_BANK_URL }}
         run: pnpm run ingest
+
+      - name: Commit updated database
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f data/GhostPR.db
+          if git diff --staged --quiet; then
+            echo "No database changes to commit."
+          else
+            git commit -m "chore: update decision registry from ingest [skip ci]"
+            git push
+          fi
