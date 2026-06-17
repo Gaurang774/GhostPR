@@ -33,8 +33,10 @@ type ExtractedDecision = z.infer<typeof ExtractedDecisionSchema>;
 
 function buildPrompt(pr: RawPR): string {
   const filesText = pr.changedFiles.slice(0, 20).join('\n'); // Cap at 20 files for token efficiency
+  // PR comments are chronological — keep the LAST 10 so the final, approved
+  // reasoning survives the cap instead of early rejected suggestions (P1).
   const commentsText = pr.comments
-    .slice(0, 10)                            // Cap at 10 comments
+    .slice(-10)
     .map((c, i) => `Comment ${i + 1}: ${c}`)
     .join('\n\n');
 
@@ -75,14 +77,14 @@ PR Title: ${pr.title}
 
 PR Author: ${pr.author}
 
+Comments (review + discussion — highest-signal reasoning):
+${commentsText || '(no comments)'}
+
 PR Body:
 ${body || '(no description provided)'}
 
 Changed Files:
-${filesText || '(no files listed)'}
-
-Comments:
-${commentsText || '(no comments)'}`;
+${filesText || '(no files listed)'}`;
 }
 
 // ─── Extractor ────────────────────────────────────────────────────────────────

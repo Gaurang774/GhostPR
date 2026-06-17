@@ -92,10 +92,13 @@ export async function fetchMergedPRs(options: {
         per_page: 100,
       });
 
+      // GitHub can return a null `body` on review/discussion comments — normalize
+      // to a trimmed string at the source so no downstream code hits `.trim()` on
+      // null and crashes the run (P0).
       const allComments = [
-        ...prComments.map((c) => c.body ?? ''),
-        ...reviewComments.map((c) => c.body ?? ''),
-      ].filter((body) => body.trim().length > 0);
+        ...prComments.map((c) => (c.body ?? '').trim()),
+        ...reviewComments.map((c) => (c.body ?? '').trim()),
+      ].filter((body) => body.length > 0);
 
       const changedFiles = files.map((f) => f.filename);
 
