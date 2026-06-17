@@ -61,15 +61,18 @@ async function main(): Promise<void> {
   db.run("DELETE FROM agent_log WHERE decision_id IN (SELECT id FROM decisions WHERE file_path LIKE 'test/%')");
   db.run("DELETE FROM decisions WHERE file_path LIKE 'test/%'");
   
-  // Insert required test data since seed.ts is now empty
+  // Insert required test data since seed.ts is now empty.
+  // source_ref uses a high 90000+ range so fixtures never collide with real
+  // ingested PRs in the DB (which carry low PR numbers) — otherwise the T1.2
+  // duplicate-PR check would trip on a fixture/real-data ref clash, not a real bug.
   db.run(`
     INSERT OR IGNORE INTO decisions (id, file_path, module, summary, reason, result, lesson, confidence, status, created, source_type, source_url, source_author, source_ref)
-    VALUES 
-    ('test-seed-1', 'auth/session.ts', 'auth', 'Decision summary', 'WARNING and Reason', 'Result', 'lesson', 0.92, 'active', datetime('now', '-5 days'), 'pr', 'url', 'author', 1),
-    ('test-seed-2', 'package.json', 'root', 'Sum', 'Rea', 'Res', 'Les', 0.86, 'active', datetime('now'), 'pr', 'url', 'auth', 2),
-    ('test-seed-3', 'infra/deploy.sh', 'infra', 'Sum', 'Rea', 'Res', 'Les', 0.4, 'deprecated', datetime('now', '-300 days'), 'pr', 'url', 'auth', 3),
-    ('test-seed-4', 'dummy1.ts', 'dummy', 'Sum', 'Rea', 'Res', 'Les', 0.9, 'active', datetime('now'), 'pr', 'url', 'auth', 4),
-    ('test-seed-5', 'dummy2.ts', 'dummy', 'Sum', 'Rea', 'Res', 'Les', 0.9, 'active', datetime('now'), 'pr', 'url', 'auth', 5)
+    VALUES
+    ('test-seed-1', 'auth/session.ts', 'auth', 'Decision summary', 'WARNING and Reason', 'Result', 'lesson', 0.92, 'active', datetime('now', '-5 days'), 'pr', 'url', 'author', 90001),
+    ('test-seed-2', 'package.json', 'root', 'Sum', 'Rea', 'Res', 'Les', 0.86, 'active', datetime('now'), 'pr', 'url', 'auth', 90002),
+    ('test-seed-3', 'infra/deploy.sh', 'infra', 'Sum', 'Rea', 'Res', 'Les', 0.4, 'deprecated', datetime('now', '-300 days'), 'pr', 'url', 'auth', 90003),
+    ('test-seed-4', 'dummy1.ts', 'dummy', 'Sum', 'Rea', 'Res', 'Les', 0.9, 'active', datetime('now'), 'pr', 'url', 'auth', 90004),
+    ('test-seed-5', 'dummy2.ts', 'dummy', 'Sum', 'Rea', 'Res', 'Les', 0.9, 'active', datetime('now'), 'pr', 'url', 'auth', 90005)
   `);
   saveDb(db);
 
