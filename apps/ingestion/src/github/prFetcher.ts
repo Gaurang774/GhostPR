@@ -92,13 +92,22 @@ export async function fetchMergedPRs(options: {
         per_page: 100,
       });
 
+      // Filter out bot comments at the source. Review bots (CodeRabbit, Sourcery,
+      // Codex, github-actions, dependabot) post large auto-generated review guides
+      // that are noise, not human reasoning — and since extraction now leads with
+      // comments, unfiltered bot output would crowd the prompt and pollute the
+      // signal scanner. GitHub marks these accounts with user.type === 'Bot' and a
+      // login ending in '[bot]'; we exclude on either.
+      const isBot = (login?: string | null, type?: string | null): boolean =>
+        type === 'Bot' || (login?.endsWith('[bot]') ?? false);
+
       // GitHub can return a null `body` on review/discussion comments — normalize
       // to a trimmed string at the source so no downstream code hits `.trim()` on
       // null and crashes the run (P0).
-      const allComments = [
-        ...prComments.map((c) => (c.body ?? '').trim()),
-        ...reviewComments.map((c) => (c.body ?? '').trim()),
-      ].filter((body) => body.length > 0);
+      const allComments = [...prComments, ...reviewComments]
+        .filter((c) => !isBot(c.user?.login, c.user?.type))
+        .map((c) => (c.body ?? '').trim())
+        .filter((body) => body.length > 0);
 
       const changedFiles = files.map((f) => f.filename);
 
