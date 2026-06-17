@@ -87,6 +87,76 @@ Changed Files:
 ${filesText || '(no files listed)'}`;
 }
 
+// ─── Self-rating second pass (extraction quality gate) ───────────────────────
+
+// Extractions scoring below this bar are discarded. Configurable so it can be
+// tuned per repo without code changes; defaults to 0.6.
+const EXTRACTION_SCORE_THRESHOLD = (() => {
+  const v = parseFloat(process.env['EXTRACTION_CONFIDENCE_THRESHOLD'] ?? '');
+  return Number.isFinite(v) && v >= 0 && v <= 1 ? v : 0.6;
+})();
+
+const ScoreSchema = z.object({
+  score: z.number().min(0).max(1),
+  verdict: z.string().optional(),
+});
+
+/**
+ * Second LLM pass: rate how confidently the extracted record represents a REAL
+ * architectural/technical decision faithfully grounded in the PR. This catches
+ * cases where the first pass let a non-architectural PR through (routine fixes,
+ * version bumps, fabricated reasoning).
+ *
+ * Returns a score in [0,1]. Fail-open: any API/parse error returns 1 so a flaky
+ * rater never silently drops a legitimate decision.
+ */
+async function scoreExtraction(pr: RawPR, extracted: ExtractedDecision): Promise<number> {
+  const prompt = `You are a strict quality auditor for a codebase decision memory system.
+Given a GitHub PR and a decision record extracted from it, rate how confident you are that the record captures a REAL architectural or technical decision that is faithfully grounded in the PR — not invented, and not a trivial bugfix/typo/formatting/dependency bump dressed up as a decision.
+
+Score rubric (0.0 - 1.0):
+- 0.9-1.0: clearly an architectural/design decision, faithfully and specifically captured
+- 0.6-0.8: a genuine technical decision but somewhat generic or partly inferred
+- 0.3-0.5: weak — borderline significance, or loosely grounded in the PR
+- 0.0-0.2: not a real decision (routine fix, formatting, version bump) or fabricated
+
+PR Title: ${pr.title}
+PR Body: ${(pr.body || '(none)').slice(0, 1500)}
+Changed Files: ${pr.changedFiles.slice(0, 20).join(', ') || '(none)'}
+
+Extracted Decision:
+- summary: ${extracted.summary}
+- reason: ${extracted.reason}
+- result: ${extracted.result}
+
+Respond with ONLY valid JSON, no markdown:
+{ "score": 0.0, "verdict": "one short phrase" }`;
+
+  let raw: string;
+  try {
+    raw = await callGroq(prompt);
+  } catch (err) {
+    console.warn(`   ⚠ PR #${pr.number}: extraction-scoring call failed — accepting by default:`, err);
+    return 1;
+  }
+
+  const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    console.warn(`   ⚠ PR #${pr.number}: extraction-scorer returned non-JSON — accepting by default`);
+    return 1;
+  }
+
+  const v = ScoreSchema.safeParse(parsed);
+  if (!v.success) {
+    console.warn(`   ⚠ PR #${pr.number}: extraction-scorer output invalid — accepting by default`);
+    return 1;
+  }
+  return v.data.score;
+}
+
 // ─── Extractor ────────────────────────────────────────────────────────────────
 
 /**
@@ -135,6 +205,16 @@ export async function extractDecision(pr: RawPR): Promise<Decision | null> {
   }
 
   const extracted: ExtractedDecision = validation.data;
+
+  // Second-pass self-rating: drop extractions that don't clear the quality bar.
+  // Catches non-architectural PRs the first pass let through.
+  const qualityScore = await scoreExtraction(pr, extracted);
+  if (qualityScore < EXTRACTION_SCORE_THRESHOLD) {
+    console.log(
+      `   ⬜ PR #${pr.number}: extraction quality ${qualityScore.toFixed(2)} < ${EXTRACTION_SCORE_THRESHOLD} — discarding as low-confidence`
+    );
+    return null;
+  }
 
   // Derive module from filePath if the LLM left module too generic
   const derivedModule = extracted.module.toLowerCase().trim();
