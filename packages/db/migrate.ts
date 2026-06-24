@@ -89,6 +89,18 @@ async function run(): Promise<void> {
   db.run(schema);
   console.log('✅ Schema applied');
 
+  // Migration: add decisions.embedding column to pre-existing databases.
+  // CREATE TABLE IF NOT EXISTS won't alter an existing table, so add it here if
+  // missing. Nullable — old decisions stay NULL until re-ingested.
+  const decisionsInfo = db.exec("PRAGMA table_info(decisions)");
+  if (decisionsInfo.length > 0) {
+    const hasEmbedding = decisionsInfo[0]!.values.some((r) => r[1] === 'embedding');
+    if (!hasEmbedding) {
+      db.run(`ALTER TABLE decisions ADD COLUMN embedding TEXT DEFAULT NULL`);
+      console.log('✅ Added decisions.embedding column');
+    }
+  }
+
   // Migration: make agent_log.decision_id nullable if it currently has NOT NULL
   const tableInfo = db.exec("PRAGMA table_info(agent_log)");
   if (tableInfo.length > 0) {
