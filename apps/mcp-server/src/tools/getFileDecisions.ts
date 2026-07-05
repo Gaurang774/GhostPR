@@ -14,6 +14,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Database } from 'sql.js';
 import type { WarningCard, HealthStatus, DecisionSource } from '@GhostPR/shared-types';
 import type { HindsightClient } from '../memory/hindsightClient.js';
+import { embedText, cosineSimilarity } from '../embeddings/embedder.js';
 import { join, dirname } from 'path';
 import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
@@ -76,6 +77,17 @@ interface DecisionRow {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const CONFIDENCE_THRESHOLD = 0.75;
+// Cosine cutoff for the semantic fallback. The stored fingerprint embeds
+// file+module+summary+reason while the query is only file+module, so matches
+// for a renamed/moved file land in a moderate range — tune if false positives
+// or misses appear.
+const SEMANTIC_SIMILARITY_THRESHOLD = 0.5;
+const SEMANTIC_MAX_RESULTS = 3;
+
+// Column order shared by the exact-match and semantic queries (semantic appends
+// `embedding` at index 13).
+const DECISION_COLUMNS = `id, file_path, module, summary, reason, result, lesson,
+            confidence, status, source_type, source_url, source_author, source_ref`;
 
 // ─── Tool Implementation ─────────────────────────────────────────────────────
 
@@ -89,8 +101,7 @@ export async function getFileDecisions(
 
   // 1. Query SQLite for decisions matching file + module
   const rows = db.exec(
-    `SELECT id, file_path, module, summary, reason, result, lesson,
-            confidence, status, source_type, source_url, source_author, source_ref
+    `SELECT ${DECISION_COLUMNS}
      FROM decisions
      WHERE file_path = '${escapeSQL(normalizedFile)}' AND module = '${escapeSQL(module)}'
      ORDER BY confidence DESC`
@@ -99,26 +110,23 @@ export async function getFileDecisions(
   const decisions: DecisionRow[] = [];
   if (rows.length > 0 && rows[0]!.values.length > 0) {
     for (const row of rows[0]!.values) {
-      decisions.push({
-        id: row[0] as string,
-        file_path: row[1] as string,
-        module: row[2] as string,
-        summary: row[3] as string,
-        reason: row[4] as string,
-        result: row[5] as string,
-        lesson: row[6] as string,
-        confidence: row[7] as number,
-        status: row[8] as string,
-        source_type: row[9] as string,
-        source_url: row[10] as string,
-        source_author: row[11] as string,
-        source_ref: row[12] as number,
-      });
+      decisions.push(rowToDecisionRow(row));
     }
   }
 
-  // 2. Rule 1 — No memory found → log the query miss, then return clean null message
+  // 2. Rule 1 — No exact match. Try a semantic fallback (handles renamed/moved
+  //    files), and only if that also misses, log the query miss + try Hindsight.
   if (decisions.length === 0) {
+    try {
+      const semanticCards = await findSemanticMatches(db, normalizedFile, module);
+      if (semanticCards.length > 0) {
+        logRetrievals(db, semanticCards, normalizedFile, module, intent, true);
+        return formatWarningCards(semanticCards, normalizedFile, module, intent, true);
+      }
+    } catch (err) {
+      console.error(`⚠ Semantic search failed for ${normalizedFile} — falling back:`, err);
+    }
+
     try {
       const logStmt = db.prepare(`
         INSERT INTO agent_log (id, decision_id, action, timestamp, result)
@@ -155,7 +163,37 @@ export async function getFileDecisions(
   }
 
   // 3. Format warning cards
-  const warningCards: WarningCard[] = decisions.map((d) => ({
+  const warningCards = decisionRowsToCards(decisions);
+
+  // 4. Log 'retrieved' action for each decision (Rule 13)
+  logRetrievals(db, warningCards, normalizedFile, module, intent, false);
+
+  // 5. Format output — reason before warning (Rule 11)
+  return formatWarningCards(warningCards, normalizedFile, module, intent, false);
+}
+
+// ─── Row / card mapping ────────────────────────────────────────────────────────
+
+function rowToDecisionRow(row: unknown[]): DecisionRow {
+  return {
+    id: row[0] as string,
+    file_path: row[1] as string,
+    module: row[2] as string,
+    summary: row[3] as string,
+    reason: row[4] as string,
+    result: row[5] as string,
+    lesson: row[6] as string,
+    confidence: row[7] as number,
+    status: row[8] as string,
+    source_type: row[9] as string,
+    source_url: row[10] as string,
+    source_author: row[11] as string,
+    source_ref: row[12] as number,
+  };
+}
+
+function decisionRowsToCards(decisions: DecisionRow[]): WarningCard[] {
+  return decisions.map((d) => ({
     decisionId: d.id,
     filePath: d.file_path,
     summary: d.summary,
@@ -172,10 +210,65 @@ export async function getFileDecisions(
     } as DecisionSource,
     isHighConfidence: d.confidence > CONFIDENCE_THRESHOLD,
   }));
+}
 
-  // 4. Log 'retrieved' action for each decision (Rule 13)
+// ─── Semantic fallback ──────────────────────────────────────────────────────────
+
+/**
+ * Embed the query (file + module) and return the highest-similarity decisions
+ * whose stored embedding clears SEMANTIC_SIMILARITY_THRESHOLD. Deprecated
+ * decisions and those without an embedding are excluded.
+ */
+async function findSemanticMatches(
+  db: Database,
+  file: string,
+  module: string
+): Promise<WarningCard[]> {
+  // Fetch candidate embeddings FIRST — if no decision has been embedded yet
+  // (e.g. a DB from before this feature, or a fresh install), skip loading the
+  // model entirely. Avoids a needless ~23MB model load + network on every miss.
+  const res = db.exec(
+    `SELECT ${DECISION_COLUMNS}, embedding
+     FROM decisions
+     WHERE status != 'deprecated' AND embedding IS NOT NULL`
+  );
+  if (res.length === 0 || res[0]!.values.length === 0) return [];
+
+  const queryVec = await embedText(`file: ${file}\nmodule: ${module}`);
+
+  const scored: Array<{ row: DecisionRow; score: number }> = [];
+  for (const row of res[0]!.values) {
+    const embStr = row[13] as string | null;
+    if (!embStr) continue;
+    let vec: number[];
+    try {
+      vec = JSON.parse(embStr) as number[];
+    } catch {
+      continue; // skip rows with a malformed embedding
+    }
+    const score = cosineSimilarity(queryVec, vec);
+    if (score >= SEMANTIC_SIMILARITY_THRESHOLD) {
+      scored.push({ row: rowToDecisionRow(row), score });
+    }
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  return decisionRowsToCards(scored.slice(0, SEMANTIC_MAX_RESULTS).map((s) => s.row));
+}
+
+// ─── Retrieval logging (Rule 13) ─────────────────────────────────────────────────
+
+function logRetrievals(
+  db: Database,
+  cards: WarningCard[],
+  file: string,
+  module: string,
+  intent: string,
+  viaSemantic: boolean
+): void {
   const now = new Date().toISOString();
-  for (const card of warningCards) {
+  const how = viaSemantic ? 'semantic match' : `${intent} intent`;
+  for (const card of cards) {
     try {
       const logStmt = db.prepare(`
         INSERT INTO agent_log (id, decision_id, action, timestamp, result)
@@ -186,16 +279,13 @@ export async function getFileDecisions(
         ':decisionId': card.decisionId,
         ':action': 'retrieved',
         ':timestamp': now,
-        ':result': `Retrieved for ${intent} intent on ${normalizedFile}`,
+        ':result': `Retrieved via ${how} on ${file} (module: ${module})`,
       });
       logStmt.free();
     } catch (err) {
       console.error(`⚠ Failed to log retrieval for decision ${card.decisionId}:`, err);
     }
   }
-
-  // 5. Format output — reason before warning (Rule 11)
-  return formatWarningCards(warningCards, normalizedFile, module, intent);
 }
 
 // ─── Formatting ───────────────────────────────────────────────────────────────
@@ -204,12 +294,16 @@ function formatWarningCards(
   cards: WarningCard[],
   file: string,
   module: string,
-  intent: string
+  intent: string,
+  viaSemantic: boolean
 ): string {
   const lines: string[] = [];
 
   lines.push(`📋 GhostPR — Decision Context for ${file} (module: ${module})`);
   lines.push(`   Intent: ${intent}`);
+  if (viaSemantic) {
+    lines.push(`   🔎 No exact path match — showing semantically related decisions (file may have moved/renamed)`);
+  }
   lines.push(`   Found ${cards.length} decision(s)\n`);
 
   for (const card of cards) {
