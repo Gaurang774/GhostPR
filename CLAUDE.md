@@ -28,6 +28,8 @@ Run a single workspace's script directly with a filter, e.g. `pnpm --filter @Gho
 
 There is no per-test runner flag; `pnpm run test` executes the whole `packages/db/run-test-suite.ts` harness. Edit that file to scope what runs.
 
+For ad-hoc debugging, `packages/db` ships two scripts run manually with tsx (no package.json entries): `inspect_db.ts` dumps every decision row (run it from inside `packages/db` — it reads `../../data/GhostPR.db` via a hardcoded relative path), and `verify-signal-scanner.ts` exercises the signal-scanner/health updater against the DB (it walks up to find the workspace root, so it runs from anywhere).
+
 ## Environment
 
 Config comes from `.env` at the repo root (copy `.env.example`). Key vars: `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO`, `GROQ_API_KEY`, `GROQ_MODEL` (default `llama-3.3-70b-versatile`), `DATABASE_PATH` (default `./data/GhostPR.db`, kept relative so it works at any clone path), `PR_LIMIT` (default 20), `SEED_DEMO` (demo data toggle), and optional `HINDSIGHT_API_KEY` / `HINDSIGHT_BANK_URL`. Every app independently walks up the tree to find the workspace root (the dir containing `pnpm-workspace.yaml`) and loads `.env` from there.
@@ -36,11 +38,20 @@ Config comes from `.env` at the repo root (copy `.env.example`). Key vars: `GITH
 
 Three apps + two packages, all sharing one SQLite file as the single source of truth:
 
-- `apps/ingestion` — one-shot CLI pipeline. Fetches merged PRs (`github/prFetcher.ts`), extracts a decision per PR via Groq (`extractor/`), runs the signal scanner against older decisions (`health/updater.ts`), applies time-decay to every decision (`health/scorer.ts`), then writes the DB. Idempotent: PRs already in the DB are skipped.
-- `apps/mcp-server` — STDIO MCP server the IDE spawns. Registers three tools (`tools/getFileDecisions`, `tools/markDeprecated`, `tools/ignoreDecision`). `getFileDecisions` is the core: matches on `file_path` + `module`, returns full warning cards above the 0.75 confidence threshold and soft notes below it, and logs every retrieval to `agent_log`.
+- `apps/ingestion` — one-shot CLI pipeline. Fetches merged PRs (`github/prFetcher.ts` — also pulls **reviews + inline + discussion comments**, bot-filtered, for richer extraction context), extracts a decision per PR via Groq (`extractor/`), generates a local embedding for it (`embeddings/embedder.ts`), runs the signal scanner against older decisions (`health/updater.ts`), applies time-decay to every decision (`health/scorer.ts`), then writes the DB. Idempotent: PRs already in the DB are skipped.
+- `apps/mcp-server` — STDIO MCP server the IDE spawns. Registers three tools (`tools/getFileDecisions`, `tools/markDeprecated`, `tools/ignoreDecision`). `getFileDecisions` is the core: it tries an **exact** `file_path` + `module` match first, then falls back to **semantic search** over decision embeddings (handles renamed/moved files — see below); returns full warning cards above the 0.75 confidence threshold and soft notes below it, and logs every retrieval to `agent_log`.
 - `apps/dashboard` — Next.js 14 App Router SSR dashboard. Reads the DB via `src/lib/db.ts`; API routes under `src/app/api/decisions`.
 - `packages/db` — owns `schema.sql`, `migrate.ts`, `seed.ts`, and the test suite.
-- `packages/shared-types` — the `Decision`, `WarningCard`, `HealthStatus`, `DecisionSource` types. **Column names in `schema.sql` and types here must stay in sync** (noted at the top of `schema.sql`).
+- `packages/shared-types` — the `Decision`, `WarningCard`, `HealthStatus`, `DecisionSource` types. **Column names in `schema.sql` and types here must stay in sync** (noted at the top of `schema.sql`). Exception: the `embedding` column is a search-index artifact, intentionally *not* on the `Decision` type — ingestion writes it directly and the dashboard's column-name mapping just ignores it.
+
+### Semantic search over file paths (`embeddings/`)
+
+`getFileDecisions` matches on exact `file_path` + `module` first; when that misses (e.g. the file was renamed or moved since the decision was recorded), it falls back to **semantic search**. Each decision is embedded at ingest time from a composite fingerprint (`file + module + summary + reason`) using `@xenova/transformers` with `Xenova/all-MiniLM-L6-v2` — a **local, in-process** model (no API key, no per-call network). The vector is stored as a JSON array in `decisions.embedding`. At query time the MCP server embeds `file + module`, ranks candidates by cosine similarity, and surfaces those above `SEMANTIC_SIMILARITY_THRESHOLD` (0.5, top 3; deprecated and un-embedded rows excluded). Old decisions stay `embedding = NULL` until re-ingested — exact match still works for them, only semantic fallback is unavailable. The fallback short-circuits (no model load) when no decision has an embedding yet.
+
+Operational notes:
+- **`@xenova/transformers` hard-requires the native `sharp` module at import**, even for text. Its build script is therefore allowed in `pnpm-workspace.yaml` (`allowBuilds.sharp: true`) / `.npmrc`; `pnpm install` downloads sharp's prebuilt binary, so **CI/Docker need network on install**.
+- The ~23MB MiniLM model downloads from HuggingFace on **first embedding call** (then cached). Air-gapped environments must pre-seed the model cache.
+- In the MCP server the model is loaded **lazily via dynamic import** and inference output is kept off stdout (no-op `progress_callback`) — never hijack `process.stdout` there; the JSON-RPC protocol owns stdout.
 
 ### SQLite via sql.js — the load/save model that matters
 

@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS decisions (
   source_type    TEXT NOT NULL,               -- "pr" | "issue"
   source_url     TEXT NOT NULL,               -- Full GitHub URL
   source_author  TEXT NOT NULL,               -- GitHub username
-  source_ref     INTEGER NOT NULL             -- PR / issue number
+  source_ref     INTEGER NOT NULL,            -- PR / issue number
+  embedding      TEXT DEFAULT NULL            -- JSON array of floats (all-MiniLM-L6-v2) for semantic fallback; NULL until (re-)ingested
 );
 
 -- Agent log: one row per MCP interaction with a decision (decision_id NULL for query-miss events)
