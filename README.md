@@ -8,6 +8,22 @@ By injecting this historical context, GhostPR prevents AI agents from accidental
 
 ---
 
+## ⚡ Quick Try (Zero Setup — Hosted MCP)
+
+Want to test GhostPR right away without cloning or installing anything? Connect this public Streamable HTTP MCP endpoint in **Gemini**, **VS Code**, **Claude**, or **MCP Inspector** (uses one-click OAuth, no token required):
+
+```text
+https://ghostpr-mcp.onrender.com/mcp
+```
+
+Try asking your AI:
+> *"Check GhostPR (`getFileDecisions`) for `.mcp.json` in module `mcp` before editing it."*
+> *"Check GhostPR for `apps/ingestion/src/github/prFetcher.ts` in module `ingestion`."*
+
+*(Want GhostPR on **your own** repository with **your own** private dashboard at `localhost:3000`? Follow the self-hosted setup below.)*
+
+---
+
 ## 📸 Screenshots
 
 **Decision Health Dashboard** — every architectural decision with its confidence, status, and source PR:
@@ -85,7 +101,7 @@ pnpm run build
 Then configure your IDE:
 
 #### Claude Code / Claude Desktop
-The repo already ships `.mcp.json` (uses `${CLAUDE_PROJECT_DIR}`). Claude Code auto-detects it when you open the project — run `/mcp` to (re)connect. For Claude Desktop, run `node scripts/mcp-setup.js` and paste the generated **Option A** block into `claude_desktop_config.json`.
+The repo already ships `.mcp.json` (uses the relative path `apps/mcp-server/dist/index.js`). Claude Code auto-detects it when you open the project — run `/mcp` to (re)connect. For Claude Desktop, run `pnpm run mcp:setup` and paste the generated **Option A** block into `claude_desktop_config.json`.
 
 #### VS Code (GitHub Copilot) / Cursor
 The repo ships `.vscode/mcp.json` (uses `${workspaceFolder}`, so it works at any path — including paths with spaces). VS Code's native MCP support auto-detects it:
@@ -154,7 +170,7 @@ pnpm run ingest    # scans the target repo's merged PRs
 pnpm run dev
 ```
 
-> **Security:** Each tester generates their own `GITHUB_TOKEN` and `GROQ_API_KEY` — never share or commit them. `.env` is git-ignored; keep it that way. The absolute `D:\...` paths in `.claude/skills` are specific to the original machine and don't apply elsewhere; use the `pnpm run …` commands above on other machines.
+> **Security:** Each tester generates their own `GITHUB_TOKEN` and `GROQ_API_KEY` — never share or commit them. `.env` is git-ignored; keep it that way.
 
 ---
 
