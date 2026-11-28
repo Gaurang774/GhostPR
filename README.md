@@ -8,13 +8,38 @@ By injecting this historical context, GhostPR prevents AI agents from accidental
 
 ---
 
-## ⚡ Quick Try (Zero Setup — Hosted MCP)
+## ⚡ Quick Try (Zero Setup — Hosted HTTPS MCP)
 
-Want to test GhostPR right away without cloning or installing anything? Connect this public Streamable HTTP MCP endpoint in **Gemini**, **VS Code**, **Claude**, or **MCP Inspector** (uses one-click OAuth, no token required):
+Want to test GhostPR right away without cloning or installing anything? Connect this public Streamable HTTP MCP endpoint (uses standard OAuth 2.1 with one-click **Approve & Connect** — no token required):
 
 ```text
 https://ghostpr-mcp.onrender.com/mcp
 ```
+
+* **Gemini (Web Connected Apps):** Settings / Connected Apps → **Connect to an MCP server** → paste `https://ghostpr-mcp.onrender.com/mcp` → click **Next** → click **Approve & Connect**.
+* **VS Code (User `mcp.json` or `.vscode/mcp.json`):**
+  ```json
+  {
+    "servers": {
+      "GhostPR-Remote": {
+        "type": "http",
+        "url": "https://ghostpr-mcp.onrender.com/mcp"
+      }
+    }
+  }
+  ```
+* **Cursor (`.cursor/mcp.json`) / Claude Code (`.mcp.json`):**
+  ```json
+  {
+    "mcpServers": {
+      "GhostPR-Remote": {
+        "url": "https://ghostpr-mcp.onrender.com/mcp"
+      }
+    }
+  }
+  ```
+
+> **Note:** Opening `/mcp` directly in a regular browser returns `401 Missing Authorization header` — that is normal (it triggers OAuth discovery for MCP clients). To check server health in a browser, open `https://ghostpr-mcp.onrender.com/health`.
 
 Try asking your AI:
 > *"Check GhostPR (`getFileDecisions`) for `.mcp.json` in module `mcp` before editing it."*
@@ -110,7 +135,14 @@ The repo ships `.vscode/mcp.json` (uses `${workspaceFolder}`, so it works at any
 2. Open Copilot Chat and switch the mode dropdown to **Agent**. **MCP tools only work in Agent mode** — not Ask or Edit mode.
 3. Click the **🛠️ tools** icon in the chat box — `getFileDecisions`, `markDeprecated`, and `ignoreDecision` should appear.
 
-> Note: `github.copilot.chat.mcpServers` in `settings.json` is **not** a valid setting — VS Code MCP servers are configured via `.vscode/mcp.json` only.
+> Note: `github.copilot.chat.mcpServers` in `settings.json` is **not** a valid setting — VS Code MCP servers are configured via `.vscode/mcp.json` or your User `mcp.json` only.
+
+#### Self-Hosted Streamable HTTP / Render
+To run the MCP server over HTTP instead of STDIO (e.g. for remote clients like Gemini or cloud hosting):
+```bash
+pnpm run mcp:http   # listens on http://0.0.0.0:8080/mcp (health: /health)
+```
+Control auth with `MCP_AUTH_MODE` (`public` for one-click OAuth, `token` to require `MCP_AUTH_TOKEN`, or `open` for no auth). A Render Blueprint is also included in `render.yaml`.
 
 **Troubleshooting** (Command Palette → **MCP: List Servers** → GhostPR → **Show Output** for the server's stderr):
 | Message | Fix |
