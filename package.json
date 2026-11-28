@@ -10,6 +10,7 @@
     "migrate": "pnpm --filter @GhostPR/db run migrate",
     "ingest": "pnpm --filter ingestion run start",
     "mcp": "pnpm --filter mcp-server run start",
+    "mcp:http": "pnpm --filter mcp-server run start:http",
     "mcp:setup": "node scripts/mcp-setup.js",
     "test": "pnpm --filter @GhostPR/db exec tsx run-test-suite.ts"
   },

@@ -70,5 +70,34 @@ services:
     env_file:
       - .env
 
+  # ── Step 4: mcp-server (remote Streamable HTTP MCP endpoint) ─────────────────
+  mcp-server:
+    build:
+      context: .
+      dockerfile: apps/mcp-server/Dockerfile
+    ports:
+      - "${MCP_PORT:-8080}:8080"
+    volumes:
+      - ghostpr_data:/app/data
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      - NODE_ENV=production
+      - PORT=8080
+      - DATABASE_PATH=/app/data/GhostPR.db
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
+      - HINDSIGHT_API_KEY=${HINDSIGHT_API_KEY:-}
+      - HINDSIGHT_BANK_URL=${HINDSIGHT_BANK_URL:-}
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
 volumes:
   ghostpr_data:

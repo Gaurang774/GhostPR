@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: ghostpr-mcp
+    runtime: docker
+    dockerfilePath: ./apps/mcp-server/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_PATH
+        value: /app/data/GhostPR.db
+      - key: SEED_DEMO
+        value: "true"
+      - key: MCP_AUTH_TOKEN
+        generateValue: true
