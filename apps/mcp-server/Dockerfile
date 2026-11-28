@@ -29,11 +29,13 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 COPY --from=builder /app/apps/mcp-server/dist ./apps/mcp-server/dist
+COPY --from=builder /app/apps/mcp-server/package.json ./apps/mcp-server/package.json
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/apps/mcp-server/node_modules ./apps/mcp-server/node_modules
 COPY --from=builder /app/packages/shared-types/dist ./packages/shared-types/dist
 COPY --from=builder /app/packages/shared-types/package.json ./packages/shared-types/package.json
 COPY --from=builder /app/packages/db/dist ./packages/db/dist
+COPY --from=builder /app/packages/db/package.json ./packages/db/package.json
 COPY --from=builder /app/packages/db/node_modules ./packages/db/node_modules
 COPY --from=builder /app/packages/db/schema.sql ./packages/db/schema.sql
 COPY --from=builder /app/pnpm-workspace.yaml ./pnpm-workspace.yaml

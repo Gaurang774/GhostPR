@@ -32,7 +32,8 @@ export interface McpRuntime {
   hindsight: HindsightClient | null;
   workspaceRoot: string;
   databasePath: string;
-  shutdown: (signal?: string) => void;
+  onBeforeShutdown: (hook: () => Promise<void> | void) => void;
+  shutdown: (signal?: string) => Promise<void>;
 }
 
 let lastWrittenMtime = 0;
@@ -131,11 +132,22 @@ export async function initRuntime(): Promise<McpRuntime> {
     }
   }, 30_000);
 
+  const beforeShutdownHooks: Array<() => Promise<void> | void> = [];
   let closed = false;
-  const shutdown = (signal?: string): void => {
+
+  const shutdown = async (signal?: string): Promise<void> => {
     if (closed) return;
     closed = true;
     clearInterval(saveInterval);
+
+    for (const hook of beforeShutdownHooks) {
+      try {
+        await hook();
+      } catch (err) {
+        console.error('⚠ Shutdown hook failed:', err);
+      }
+    }
+
     try {
       saveDatabase(workspaceRoot, db, databasePath);
     } catch (err) {
@@ -146,14 +158,21 @@ export async function initRuntime(): Promise<McpRuntime> {
   };
 
   process.on('SIGINT', () => {
-    shutdown('SIGINT');
-    process.exit(0);
+    void shutdown('SIGINT').finally(() => process.exit(0));
   });
 
   process.on('SIGTERM', () => {
-    shutdown('SIGTERM');
-    process.exit(0);
+    void shutdown('SIGTERM').finally(() => process.exit(0));
   });
 
-  return { db, hindsight, workspaceRoot, databasePath, shutdown };
+  return {
+    db,
+    hindsight,
+    workspaceRoot,
+    databasePath,
+    onBeforeShutdown: (hook) => {
+      beforeShutdownHooks.push(hook);
+    },
+    shutdown,
+  };
 }

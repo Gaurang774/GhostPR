@@ -9,6 +9,7 @@
  * Exposes:
  *   POST/GET/DELETE /mcp   (or MCP_PATH) — MCP Streamable HTTP endpoint
  *   GET /health                          — Health check for cloud hosts
+ *   GET /                                — Service metadata
  *
  * Environment:
  *   PORT / MCP_PORT   — Port to listen on (default: 8080)
@@ -17,6 +18,7 @@
  *   MCP_AUTH_TOKEN    — Optional Bearer token required on /mcp requests
  */
 
+import { timingSafeEqual } from 'node:crypto';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -25,21 +27,35 @@ import { initRuntime, type McpRuntime } from './runtime.js';
 
 const MAX_BODY_BYTES = 1_048_576; // 1 MB
 
-function sendJson(res: ServerResponse, status: number, payload: unknown): void {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
+function sendJson(
+  res: ServerResponse,
+  status: number,
+  payload: unknown,
+  extraHeaders?: Record<string, string>
+): void {
+  res.writeHead(status, { 'Content-Type': 'application/json', ...extraHeaders });
   res.end(JSON.stringify(payload));
 }
 
 function setCorsHeaders(res: ServerResponse): void {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Mcp-Session-Id');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type, Accept, Authorization, Mcp-Session-Id, Last-Event-ID'
+  );
+  res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
 }
 
 function isAuthorized(req: IncomingMessage, authToken: string | undefined): boolean {
   if (!authToken) return true;
   const header = req.headers['authorization'];
-  return header === `Bearer ${authToken}`;
+  if (!header || !header.startsWith('Bearer ')) return false;
+
+  const provided = Buffer.from(header.slice('Bearer '.length), 'utf8');
+  const expected = Buffer.from(authToken, 'utf8');
+  if (provided.length !== expected.length) return false;
+  return timingSafeEqual(provided, expected);
 }
 
 function readJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -73,10 +89,20 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
+function resolvePort(): number {
+  const raw = process.env['PORT'] ?? process.env['MCP_PORT'] ?? '8080';
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid PORT value: "${raw}". Expected an integer between 1 and 65535.`);
+  }
+  return port;
+}
+
 export async function startHttpServer(runtime: McpRuntime): Promise<void> {
-  const port = Number(process.env['PORT'] ?? process.env['MCP_PORT'] ?? 8080);
+  const port = resolvePort();
   const host = process.env['HOST'] ?? '0.0.0.0';
-  const mcpPath = process.env['MCP_PATH'] ?? '/mcp';
+  const rawPath = process.env['MCP_PATH'] ?? '/mcp';
+  const mcpPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
   const authToken = process.env['MCP_AUTH_TOKEN']?.trim() || undefined;
 
   const httpServer = createHttpServer(async (req, res) => {
@@ -89,6 +115,17 @@ export async function startHttpServer(runtime: McpRuntime): Promise<void> {
     }
 
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+
+    if (url.pathname === '/' && req.method === 'GET') {
+      sendJson(res, 200, {
+        status: 'ok',
+        service: 'GhostPR-mcp',
+        transport: 'streamable-http',
+        mcpEndpoint: mcpPath,
+        healthEndpoint: '/health',
+      });
+      return;
+    }
 
     if (url.pathname === '/health' && req.method === 'GET') {
       sendJson(res, 200, {
@@ -105,11 +142,16 @@ export async function startHttpServer(runtime: McpRuntime): Promise<void> {
     }
 
     if (!isAuthorized(req, authToken)) {
-      sendJson(res, 401, {
-        jsonrpc: '2.0',
-        error: { code: -32001, message: 'Unauthorized' },
-        id: null,
-      });
+      sendJson(
+        res,
+        401,
+        {
+          jsonrpc: '2.0',
+          error: { code: -32001, message: 'Unauthorized' },
+          id: null,
+        },
+        { 'WWW-Authenticate': 'Bearer' }
+      );
       return;
     }
 
@@ -152,6 +194,13 @@ export async function startHttpServer(runtime: McpRuntime): Promise<void> {
       }
     }
   });
+
+  runtime.onBeforeShutdown(
+    () =>
+      new Promise<void>((resolve) => {
+        httpServer.close(() => resolve());
+      })
+  );
 
   await new Promise<void>((resolve) => {
     httpServer.listen(port, host, () => resolve());
