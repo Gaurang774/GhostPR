@@ -1,5 +1,5 @@
 /**
- * http.ts — MCP Server Streamable HTTP entry point
+ * http.ts — MCP Server Streamable HTTP + Standard OAuth 2.1 entry point
  *
  * Usage:
  *   pnpm run mcp:http              (from repo root)
@@ -7,87 +7,31 @@
  *   node apps/mcp-server/dist/http.js
  *
  * Exposes:
- *   POST/GET/DELETE /mcp   (or MCP_PATH) — MCP Streamable HTTP endpoint
- *   GET /health                          — Health check for cloud hosts
- *   GET /                                — Service metadata
+ *   POST/GET/DELETE /mcp                  — MCP Streamable HTTP endpoint
+ *   GET /health                           — Health check for cloud hosts
+ *   GET /                                 — Service metadata
+ *   /.well-known/oauth-* + /authorize + /token + /register + /revoke (when MCP_AUTH_TOKEN is set)
  *
  * Environment:
- *   PORT / MCP_PORT   — Port to listen on (default: 8080)
- *   HOST              — Bind address (default: 0.0.0.0)
- *   MCP_PATH          — Endpoint path (default: /mcp)
- *   MCP_AUTH_TOKEN    — Optional Bearer token required on /mcp requests
+ *   PORT / MCP_PORT     — Port to listen on (default: 8080)
+ *   HOST                — Bind address (default: 0.0.0.0)
+ *   MCP_PATH            — Endpoint path (default: /mcp)
+ *   MCP_AUTH_TOKEN      — Enables OAuth 2.1 + direct Bearer auth when set
+ *   MCP_PUBLIC_URL      — Public HTTPS origin (defaults to RENDER_EXTERNAL_URL or http://localhost:<port>)
  */
 
-import { timingSafeEqual } from 'node:crypto';
-import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { Server } from 'node:http';
 import { pathToFileURL } from 'node:url';
+import express, { type Request, type RequestHandler, type Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import {
+  getOAuthProtectedResourceMetadataUrl,
+  mcpAuthRouter,
+} from '@modelcontextprotocol/sdk/server/auth/router.js';
+import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { createServer } from './server.js';
 import { initRuntime, type McpRuntime } from './runtime.js';
-
-const MAX_BODY_BYTES = 1_048_576; // 1 MB
-
-function sendJson(
-  res: ServerResponse,
-  status: number,
-  payload: unknown,
-  extraHeaders?: Record<string, string>
-): void {
-  res.writeHead(status, { 'Content-Type': 'application/json', ...extraHeaders });
-  res.end(JSON.stringify(payload));
-}
-
-function setCorsHeaders(res: ServerResponse): void {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'Content-Type, Accept, Authorization, Mcp-Session-Id, Last-Event-ID'
-  );
-  res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
-}
-
-function isAuthorized(req: IncomingMessage, authToken: string | undefined): boolean {
-  if (!authToken) return true;
-  const header = req.headers['authorization'];
-  if (!header || !header.startsWith('Bearer ')) return false;
-
-  const provided = Buffer.from(header.slice('Bearer '.length), 'utf8');
-  const expected = Buffer.from(authToken, 'utf8');
-  if (provided.length !== expected.length) return false;
-  return timingSafeEqual(provided, expected);
-}
-
-function readJsonBody(req: IncomingMessage): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let totalBytes = 0;
-
-    req.on('data', (chunk: Buffer) => {
-      totalBytes += chunk.length;
-      if (totalBytes > MAX_BODY_BYTES) {
-        req.destroy();
-        reject(new Error('Request body too large'));
-        return;
-      }
-      chunks.push(chunk);
-    });
-
-    req.on('end', () => {
-      if (chunks.length === 0) {
-        resolve(undefined);
-        return;
-      }
-      try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-      } catch {
-        reject(new Error('Invalid JSON body'));
-      }
-    });
-
-    req.on('error', reject);
-  });
-}
+import { GhostPROAuthProvider } from './auth.js';
 
 function resolvePort(): number {
   const raw = process.env['PORT'] ?? process.env['MCP_PORT'] ?? '8080';
@@ -98,78 +42,111 @@ function resolvePort(): number {
   return port;
 }
 
+function resolvePublicOrigin(port: number): string {
+  const configured =
+    process.env['MCP_PUBLIC_URL']?.trim() ||
+    process.env['RENDER_EXTERNAL_URL']?.trim();
+  if (configured) {
+    return configured.replace(/\/+$/, '');
+  }
+  return `http://localhost:${port}`;
+}
+
 export async function startHttpServer(runtime: McpRuntime): Promise<void> {
   const port = resolvePort();
   const host = process.env['HOST'] ?? '0.0.0.0';
   const rawPath = process.env['MCP_PATH'] ?? '/mcp';
   const mcpPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
   const authToken = process.env['MCP_AUTH_TOKEN']?.trim() || undefined;
+  const publicOrigin = resolvePublicOrigin(port);
 
-  const httpServer = createHttpServer(async (req, res) => {
-    setCorsHeaders(res);
+  const app = express();
+  // Required behind Render / reverse proxies so express-rate-limit uses X-Forwarded-For cleanly
+  app.set('trust proxy', 1);
 
+  // Global CORS for web-based MCP clients (Gemini, Claude Web, MCP Inspector)
+  app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      'Content-Type, Accept, Authorization, Mcp-Session-Id, Last-Event-ID'
+    );
+    res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
     if (req.method === 'OPTIONS') {
-      res.writeHead(204);
-      res.end();
+      res.status(204).end();
       return;
     }
+    next();
+  });
 
-    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+  app.get('/', (_req, res) => {
+    res.json({
+      status: 'ok',
+      service: 'GhostPR-mcp',
+      transport: 'streamable-http',
+      mcpEndpoint: mcpPath,
+      healthEndpoint: '/health',
+      oauthEnabled: !!authToken,
+    });
+  });
 
-    if (url.pathname === '/' && req.method === 'GET') {
-      sendJson(res, 200, {
-        status: 'ok',
-        service: 'GhostPR-mcp',
-        transport: 'streamable-http',
-        mcpEndpoint: mcpPath,
-        healthEndpoint: '/health',
-      });
-      return;
-    }
+  app.get('/health', (_req, res) => {
+    res.json({
+      status: 'ok',
+      service: 'GhostPR-mcp',
+      transport: 'streamable-http',
+    });
+  });
 
-    if (url.pathname === '/health' && req.method === 'GET') {
-      sendJson(res, 200, {
-        status: 'ok',
-        service: 'GhostPR-mcp',
-        transport: 'streamable-http',
-      });
-      return;
-    }
+  const mcpMiddleware: RequestHandler[] = [];
 
-    if (url.pathname !== mcpPath) {
-      sendJson(res, 404, { error: 'Not found' });
-      return;
-    }
+  if (authToken) {
+    const issuerUrl = new URL(publicOrigin);
+    const resourceServerUrl = new URL(mcpPath, issuerUrl);
+    const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(resourceServerUrl);
+    const oauthProvider = new GhostPROAuthProvider(authToken);
 
-    if (!isAuthorized(req, authToken)) {
-      sendJson(
-        res,
-        401,
-        {
-          jsonrpc: '2.0',
-          error: { code: -32001, message: 'Unauthorized' },
-          id: null,
+    app.use(
+      mcpAuthRouter({
+        provider: oauthProvider,
+        issuerUrl,
+        resourceServerUrl,
+        resourceName: 'GhostPR MCP Server',
+        scopesSupported: ['mcp'],
+        clientRegistrationOptions: {
+          clientIdGeneration: false,
         },
-        { 'WWW-Authenticate': 'Bearer' }
-      );
-      return;
-    }
+      })
+    );
 
-    let parsedBody: unknown;
-    if (req.method === 'POST') {
-      try {
-        parsedBody = await readJsonBody(req);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Bad request';
-        sendJson(res, 400, {
-          jsonrpc: '2.0',
-          error: { code: -32700, message },
-          id: null,
-        });
-        return;
-      }
-    }
+    // Fallback alias for clients probing root protected-resource metadata instead of path-suffixed RFC 9728 URL
+    app.get('/.well-known/oauth-protected-resource', (_req, res) => {
+      res.json({
+        resource: resourceServerUrl.href,
+        authorization_servers: [issuerUrl.href],
+        scopes_supported: ['mcp'],
+        resource_name: 'GhostPR MCP Server',
+      });
+    });
 
+    app.post(
+      '/oauth/approve',
+      express.urlencoded({ extended: false }),
+      oauthProvider.handleApproval
+    );
+
+    mcpMiddleware.push(
+      requireBearerAuth({
+        verifier: oauthProvider,
+        resourceMetadataUrl,
+      })
+    );
+  }
+
+  mcpMiddleware.push(express.json({ limit: '1mb' }));
+
+  const handleMcp = async (req: Request, res: Response): Promise<void> => {
     const mcpServer = createServer({ db: runtime.db, hindsight: runtime.hindsight });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // Stateless mode for cloud/remote MCP clients
@@ -182,17 +159,27 @@ export async function startHttpServer(runtime: McpRuntime): Promise<void> {
 
     try {
       await mcpServer.connect(transport);
-      await transport.handleRequest(req, res, parsedBody);
+      await transport.handleRequest(req, res, req.body);
     } catch (err) {
       console.error('❌ HTTP MCP request error:', err);
       if (!res.headersSent) {
-        sendJson(res, 500, {
+        res.status(500).json({
           jsonrpc: '2.0',
           error: { code: -32603, message: 'Internal server error' },
           id: null,
         });
       }
     }
+  };
+
+  app.all(mcpPath, ...mcpMiddleware, handleMcp);
+
+  app.use((_req, res) => {
+    res.status(404).json({ error: 'Not found' });
+  });
+
+  const httpServer: Server = await new Promise((resolve) => {
+    const srv = app.listen(port, host, () => resolve(srv));
   });
 
   runtime.onBeforeShutdown(
@@ -202,14 +189,11 @@ export async function startHttpServer(runtime: McpRuntime): Promise<void> {
       })
   );
 
-  await new Promise<void>((resolve) => {
-    httpServer.listen(port, host, () => resolve());
-  });
-
   console.error(`✅ GhostPR MCP Server is running (Streamable HTTP mode)`);
+  console.error(`   Public:   ${publicOrigin}`);
   console.error(`   Endpoint: http://${host}:${port}${mcpPath}`);
   console.error(`   Health:   http://${host}:${port}/health`);
-  console.error(`   Auth:     ${authToken ? 'Bearer token enabled' : 'disabled (open)'}`);
+  console.error(`   Auth:     ${authToken ? 'OAuth 2.1 (PKCE + DCR) + Bearer' : 'disabled (open)'}`);
   console.error('');
 }
 
