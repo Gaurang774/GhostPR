@@ -131,7 +131,12 @@ class TokenCrypto {
   }
 }
 
-function renderConsentPage(tx: PendingAuthTx, txToken: string, errorMessage?: string): string {
+function renderConsentPage(
+  tx: PendingAuthTx,
+  txToken: string,
+  requirePassphrase: boolean,
+  errorMessage?: string
+): string {
   const redirectHost = (() => {
     try {
       return new URL(tx.redirectUri).hostname;
@@ -143,6 +148,10 @@ function renderConsentPage(tx: PendingAuthTx, txToken: string, errorMessage?: st
   const scopeList = tx.scopes.length > 0 ? tx.scopes.join(', ') : 'mcp';
   const errorBlock = errorMessage
     ? `<div class="error" role="alert">${escapeHtml(errorMessage)}</div>`
+    : '';
+  const passphraseField = requirePassphrase
+    ? `<label for="passphrase">Server Access Token (<code>MCP_AUTH_TOKEN</code>)</label>
+      <input id="passphrase" name="passphrase" type="password" autocomplete="current-password" required autofocus />`
     : '';
 
   return `<!DOCTYPE html>
@@ -206,8 +215,7 @@ function renderConsentPage(tx: PendingAuthTx, txToken: string, errorMessage?: st
     ${errorBlock}
     <form method="POST" action="/oauth/approve">
       <input type="hidden" name="tx" value="${escapeHtml(txToken)}" />
-      <label for="passphrase">Server Access Token (<code>MCP_AUTH_TOKEN</code>)</label>
-      <input id="passphrase" name="passphrase" type="password" autocomplete="current-password" required autofocus />
+      ${passphraseField}
       <div class="actions">
         <button class="deny" type="submit" name="action" value="deny" formnovalidate>Deny</button>
         <button class="approve" type="submit" name="action" value="approve">Approve &amp; Connect</button>
@@ -257,13 +265,23 @@ export class StatelessClientsStore implements OAuthRegisteredClientsStore {
   }
 }
 
+export interface GhostPROAuthOptions {
+  secret: string;
+  requirePassphrase: boolean;
+  directBearerToken?: string;
+}
+
 export class GhostPROAuthProvider implements OAuthServerProvider {
   public readonly clientsStore: StatelessClientsStore;
   private readonly crypto: TokenCrypto;
+  private readonly directBearerToken?: string;
+  private readonly requirePassphrase: boolean;
   private readonly usedCodes = new Map<string, number>();
 
-  constructor(private readonly authToken: string) {
-    this.crypto = new TokenCrypto(authToken);
+  constructor(options: GhostPROAuthOptions) {
+    this.directBearerToken = options.directBearerToken;
+    this.requirePassphrase = options.requirePassphrase;
+    this.crypto = new TokenCrypto(options.secret);
     this.clientsStore = new StatelessClientsStore(this.crypto);
   }
 
@@ -283,7 +301,7 @@ export class GhostPROAuthProvider implements OAuthServerProvider {
       exp: Date.now() + TX_TTL_MS,
     };
     const txToken = this.crypto.seal(tx);
-    res.status(200).type('html').send(renderConsentPage(tx, txToken));
+    res.status(200).type('html').send(renderConsentPage(tx, txToken, this.requirePassphrase));
   }
 
   handleApproval = (req: Request, res: Response): void => {
@@ -310,11 +328,21 @@ export class GhostPROAuthProvider implements OAuthServerProvider {
       return;
     }
 
-    if (!safeEqual(passphrase, this.authToken)) {
+    if (
+      this.requirePassphrase &&
+      (!this.directBearerToken || !safeEqual(passphrase, this.directBearerToken))
+    ) {
       res
         .status(401)
         .type('html')
-        .send(renderConsentPage(tx, txToken, 'Invalid MCP_AUTH_TOKEN. Please try again.'));
+        .send(
+          renderConsentPage(
+            tx,
+            txToken,
+            this.requirePassphrase,
+            'Invalid MCP_AUTH_TOKEN. Please try again.'
+          )
+        );
       return;
     }
 
@@ -386,7 +414,7 @@ export class GhostPROAuthProvider implements OAuthServerProvider {
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    if (safeEqual(token, this.authToken)) {
+    if (this.directBearerToken && safeEqual(token, this.directBearerToken)) {
       return {
         token,
         clientId: 'direct-bearer',

@@ -16,10 +16,12 @@
  *   PORT / MCP_PORT     — Port to listen on (default: 8080)
  *   HOST                — Bind address (default: 0.0.0.0)
  *   MCP_PATH            — Endpoint path (default: /mcp)
- *   MCP_AUTH_TOKEN      — Enables OAuth 2.1 + direct Bearer auth when set
+ *   MCP_AUTH_MODE       — 'public' (one-click OAuth), 'token' (passphrase OAuth), or 'open' (no auth)
+ *   MCP_AUTH_TOKEN      — Signing secret (and passphrase when MCP_AUTH_MODE=token)
  *   MCP_PUBLIC_URL      — Public HTTPS origin (defaults to RENDER_EXTERNAL_URL or http://localhost:<port>)
  */
 
+import { randomBytes } from 'node:crypto';
 import type { Server } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import express, { type Request, type RequestHandler, type Response } from 'express';
@@ -52,12 +54,26 @@ function resolvePublicOrigin(port: number): string {
   return `http://localhost:${port}`;
 }
 
+type AuthMode = 'public' | 'token' | 'open';
+
+function resolveAuthMode(authToken: string | undefined): AuthMode {
+  const raw = process.env['MCP_AUTH_MODE']?.trim().toLowerCase();
+  if (raw === 'public' || raw === 'token' || raw === 'open') {
+    if (raw === 'token' && !authToken) {
+      throw new Error('MCP_AUTH_MODE=token requires MCP_AUTH_TOKEN to be set.');
+    }
+    return raw;
+  }
+  return authToken ? 'public' : 'open';
+}
+
 export async function startHttpServer(runtime: McpRuntime): Promise<void> {
   const port = resolvePort();
   const host = process.env['HOST'] ?? '0.0.0.0';
   const rawPath = process.env['MCP_PATH'] ?? '/mcp';
   const mcpPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
   const authToken = process.env['MCP_AUTH_TOKEN']?.trim() || undefined;
+  const authMode = resolveAuthMode(authToken);
   const publicOrigin = resolvePublicOrigin(port);
 
   const app = express();
@@ -87,7 +103,8 @@ export async function startHttpServer(runtime: McpRuntime): Promise<void> {
       transport: 'streamable-http',
       mcpEndpoint: mcpPath,
       healthEndpoint: '/health',
-      oauthEnabled: !!authToken,
+      authMode,
+      oauthEnabled: authMode !== 'open',
     });
   });
 
@@ -101,11 +118,15 @@ export async function startHttpServer(runtime: McpRuntime): Promise<void> {
 
   const mcpMiddleware: RequestHandler[] = [];
 
-  if (authToken) {
+  if (authMode !== 'open') {
     const issuerUrl = new URL(publicOrigin);
     const resourceServerUrl = new URL(mcpPath, issuerUrl);
     const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(resourceServerUrl);
-    const oauthProvider = new GhostPROAuthProvider(authToken);
+    const oauthProvider = new GhostPROAuthProvider({
+      secret: authToken ?? randomBytes(32).toString('hex'),
+      requirePassphrase: authMode === 'token',
+      directBearerToken: authToken,
+    });
 
     app.use(
       mcpAuthRouter({
@@ -189,11 +210,18 @@ export async function startHttpServer(runtime: McpRuntime): Promise<void> {
       })
   );
 
+  const authSummary =
+    authMode === 'open'
+      ? 'disabled (open)'
+      : authMode === 'public'
+        ? 'OAuth 2.1 (public one-click consent)'
+        : 'OAuth 2.1 (MCP_AUTH_TOKEN required)';
+
   console.error(`✅ GhostPR MCP Server is running (Streamable HTTP mode)`);
   console.error(`   Public:   ${publicOrigin}`);
   console.error(`   Endpoint: http://${host}:${port}${mcpPath}`);
   console.error(`   Health:   http://${host}:${port}/health`);
-  console.error(`   Auth:     ${authToken ? 'OAuth 2.1 (PKCE + DCR) + Bearer' : 'disabled (open)'}`);
+  console.error(`   Auth:     ${authSummary}`);
   console.error('');
 }
 

@@ -13,5 +13,7 @@ services:
         value: /app/data/GhostPR.db
       - key: SEED_DEMO
         value: "true"
+      - key: MCP_AUTH_MODE
+        value: public
       - key: MCP_AUTH_TOKEN
         generateValue: true
